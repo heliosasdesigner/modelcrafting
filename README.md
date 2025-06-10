@@ -1,126 +1,130 @@
-# GPT-2-Style Model Crafting Lab
+# ModelCrafting: Learning GPT from Scratch
 
-A pragmatic, experiment-driven project for building, training, and serving a GPT-2-style language model using modern ML tooling (PyTorch Lightning, MLflow, Streamlit, FastAPI, and more). This project is inspired by Karpathy's nanoGPT and is designed for rapid prototyping, robust experiment tracking, and easy production uplift.
+This project is a hands-on implementation of language models, starting from the basics and building up to more complex architectures. It's based on Andrej Karpathy's excellent tutorial series "Let's build GPT: from scratch, in code, spelled out" (https://www.youtube.com/watch?v=kCc8FmEb1nY).
 
----
+## 🎯 Project Structure
 
-## 🚀 Quickstart
+The project follows a progressive learning path:
 
-### 0. Prep a Clean Workspace
+1. **Bigram Language Model** (`nanogpt/bigram.py`)
+   - Basic character-level language model
+   - Token embeddings and positional embeddings
+   - Simple training loop with evaluation
+   - Text generation capabilities
 
-1. **Create a fresh environment:**
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Python 3.x
+- PyTorch
+- CUDA (optional, for GPU acceleration)
+
+### Installation
+
+1. **Create a virtual environment:**
    ```bash
-   conda create -n gpt2-lab python=3.11
-   conda activate gpt2-lab
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-2. **Install core libraries (adjust CUDA version as needed):**
+2. **Install dependencies:**
    ```bash
-   pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
-   pip install pytorch-lightning streamlit mlflow wandb pydantic[extra] polars \
-       postgresql sqlalchemy psycopg2-binary rich tqdm
+   pip install torch
    ```
 
-3. **Clone Karpathy's reference repo for prototyping:**
-   ```bash
-   git clone https://github.com/karpathy/nanoGPT.git
-   cd nanoGPT
-   ```
+3. **Prepare the dataset:**
+   - Place your training text file in the `data` directory
+   - The current implementation uses `tiny_shakespeare.txt`
 
----
+## 📚 Implementation Details
 
-## 1. Re-implement the Tutorial Model with Lightning
+### Bigram Model (`nanogpt/bigram.py`)
 
-- **Tokenizer:**  
-  Reuse `encode.py` from nanoGPT. Wrap in a Pydantic class for typed config (vocab size, etc).
+The bigram model is our starting point, implementing:
+- Character-level tokenization
+- Token and positional embeddings
+- Simple forward pass with cross-entropy loss
+- Text generation with temperature sampling
 
-- **Model:**  
-  Copy `model.py` blocks (MultiHeadAttention, Block, etc.) and inherit from `torch.nn.Module`.  
-  Wrap forward pass in a PyTorch-Lightning `LightningModule` (add `training_step`, `configure_optimizers`).
+Key components:
+- `BigramLanguageModel`: The main model class
+- `get_batch`: Data loader for training
+- `estimate_loss`: Evaluation function
+- `train_model`: Training loop implementation
 
-- **Config:**  
-  Create `config.py` with a `GPTConfig` Pydantic model (`n_layer`, `n_head`, `n_embd`, `dropout`, `vocab_size`, `ctx_len`).
+## 🎓 Learning Path
 
-- **Dataset:**  
-  Start with `tiny_shakespeare.txt` (~10MB) to confirm training loop.
+This project follows the learning path from Karpathy's video series:
 
-- **Trainer Script:**  
-  In `train.py`, parse a Pydantic config, instantiate LightningModule/DataModule, and call `pl.Trainer`.  
-  Add `MLflowLogger()` or `WandbLogger()`.
+1. **Basics of Language Modeling**
+   - Character-level tokenization
+   - Train/validation splits
+   - Simple bigram model
 
-- **Experiment Metadata:**  
-  Open an MLflow run inside the Streamlit callback that launches training (`mlflow.start_run()`), so every widget tweak is logged.
+2. **Self-Attention Mechanism** (Coming Soon)
+   - Matrix multiplication for weighted aggregation
+   - Scaled attention
+   - Multi-head attention
 
----
+3. **Transformer Architecture** (Coming Soon)
+   - Encoder/Decoder blocks
+   - Feed-forward networks
+   - Residual connections
+   - Layer normalization
 
-## 2. Streamlit Front-End (Phase 1)
+## 🔧 Usage
 
-- **Create `app.py`:**
-  - Sidebar widgets: dataset path, context length, batch size, learning rate, max iters, etc.
-  - "Train" button: builds `GPTConfig`, spawns Lightning Trainer (GPU, mixed precision), pipes logs to MLflow/W&B, appends run metadata to PostgreSQL via SQLAlchemy.
-  - Live progress: use `st.progress` and `st.line_chart` (stream metrics via Lightning's CSVLogger or MLflow).
+### Training the Bigram Model
 
----
+```python
+from nanogpt.bigram import create_model, train_model
 
-## 3. Production-Grade Uplift (Phase 2 Roadmap)
+# Create model
+model = create_model(device="cuda" if torch.cuda.is_available() else "cpu")
 
-- **Package Refactor:**  
-  Move model/tokenizer into `ml_app/`. Expose `predict(text, max_new_tokens)`.
+# Train model
+model, training_records = train_model(
+    model=model,
+    train_data=train_data,
+    val_data=val_data,
+    max_iters=3000,
+    eval_interval=300,
+    eval_iters=200,
+    block_size=8,
+    batch_size=32,
+    learning_rate=1e-2
+)
+```
 
-- **Serving:**  
-  Spin up FastAPI in `api/`. POST `/generate` receives JSON, calls `predict`. Mount OpenAPI docs.
+### Generating Text
 
-- **Background Jobs:**  
-  Use Celery (with Redis) for scheduled retraining and batch scoring. FastAPI enqueues tasks.
-
-- **Model Registry:**  
-  Point MLflow to PostgreSQL storage; promote best checkpoints to Staging/Production.
-
-- **Docker & Orchestration:**  
-  Write `docker-compose.yml` for dev; for prod, bake images and deploy to k8s/ECS.
-
-- **Observability:**  
-  Instrument Prometheus metrics in FastAPI middleware; dashboard in Grafana.
-
-- **Operator UI:**  
-  If Streamlit suffices, keep it. Otherwise, iterate toward a React + Tailwind dashboard.
-
----
-
-## 4. Validation & Sanity Checks
-
-- Overfit a single batch (loss → 0).
-- Greedy sample after every N steps.
-- Compare perplexity on held-out split vs. nanoGPT.
-- Profiling: `torch.cuda.memory_summary()`, Lightning's Profiler.
-
----
-
-## 5. Nice-to-Haves
-
-- **DAG-style orchestration:** Prefect 2.
-- **Data versioning:** DVC or LakeFS.
-- **Real-time log streaming:** Socket.IO from FastAPI.
-
-
-
----
+```python
+# Generate text
+context = torch.zeros((1, 1), dtype=torch.long, device=device)
+generated = model.generate(context, max_new_tokens=100)
+print(decode(generated[0].tolist()))
+```
 
 ## 📚 References
 
-- [nanoGPT (Karpathy)](https://github.com/karpathy/nanoGPT)
-- [PyTorch Lightning](https://www.pytorchlightning.ai/)
-- [MLflow](https://mlflow.org/)
-- [Streamlit](https://streamlit.io/)
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [Celery](https://docs.celeryq.dev/)
-- [Prefect](https://www.prefect.io/)
-- [DVC](https://dvc.org/)
-- [LakeFS](https://lakefs.io/)
+- [Let's build GPT: from scratch, in code, spelled out](https://www.youtube.com/watch?v=kCc8FmEb1nY)
+- [Attention is All You Need paper](https://arxiv.org/abs/1706.03762)
+- [OpenAI GPT-3 paper](https://arxiv.org/abs/2005.14165)
+- [nanoGPT repository](https://github.com/karpathy/nanoGPT)
 
----
+## 🎯 Next Steps
+
+1. Implement multi-head self-attention
+2. Add transformer blocks
+3. Scale up the model architecture
+4. Add more sophisticated training features
+5. Implement proper model checkpointing
 
 ## 📝 Notes
 
-- For learning-rate schedules, batch-size scaling, and evaluation frequency, see the "eight timeless tips" video (YouTube ID: iCwvGys_iM4).
-- Bake best practices into Lightning callbacks (e.g., `LearningRateMonitor`, `ModelCheckpoint`). 
+- The current implementation is focused on educational purposes
+- The model is trained on a small dataset for demonstration
+- GPU acceleration is recommended for faster training
+- The code includes detailed comments explaining each component
+

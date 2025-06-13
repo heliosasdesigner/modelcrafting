@@ -2,21 +2,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Force CPU device
+device = "cpu"
 
 batch_size = 32  # How many independent sequences will we process in parallel?
 block_size = 8  # What is the maximum context length for predictions?
 max_iters = 3000  # How many iterations to train for?
 eval_interval = 300  # How often to evaluate the loss?
 learning_rate = 1e-2
-device = "cuda" if torch.cuda.is_available() else "cpu"
 eval_iters = 200
 n_embd = 32  # Number of embedding dimension
 
 # ------------------------------------------------------------
-
-torch.manual_seed(1337)
-torch.cuda.manual_seed(1337)
-
 
 # Import the data
 with open("data/tiny_shakespeare.txt", "r", encoding="utf-8") as file:
@@ -106,32 +103,32 @@ class BigramLanguageModel(nn.Module):
         # idx is (B, T) array of indices in the current context
         for _ in range(max_new_tokens):
             # get the predictions
-            print(
-                f"idx shape: {idx.shape}, device: {idx.device}, type: {type(idx)},idx:{idx}"
-            )
+            #   print(
+            #     f"idx shape: {idx.shape}, device: {idx.device}, type: {type(idx)},idx:{idx}"
+            # )
             logits, loss = self(idx)
-            print(
-                f"1.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
-            )
+            # print(
+            #     f"1.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+            # )
 
             # focus only on the last time step
             logits = logits[:, -1, :]  # becomes (B, C)
-            print(
-                f"2.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
-            )
+            # print(
+            #     f"2.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+            # )
             # apply softmax to get probabilities
             probs = F.softmax(logits, dim=-1)  # (B, C)
-            print(
-                f"3.probs min: {probs.min()}, max: {probs.max()}, shape: {probs.shape}"
-            )
+            # print(
+            #     f"3.probs min: {probs.min()}, max: {probs.max()}, shape: {probs.shape}"
+            # )
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            print(
-                f"4.idx_next min: {idx_next.min()}, max: {idx_next.max()}, shape: {idx_next.shape}"
-            )
+            # print(
+            #     f"4.idx_next min: {idx_next.min()}, max: {idx_next.max()}, shape: {idx_next.shape}"
+            # )
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
-            print(f"5.idx min: {idx.min()}, max: {idx.max()}, shape: {idx.shape}")
+            # print(f"5.idx min: {idx.min()}, max: {idx.max()}, shape: {idx.shape}")
         return idx
 
 
@@ -163,16 +160,16 @@ def train_model(
     device = next(model.parameters()).device
 
     # Check model parameters device
-    print("Model device check:")
+    # print("Model device check:")
     for name, param in model.named_parameters():
         print(f"Parameter {name} is on device: {param.device}")
 
     # Check and move input data to correct device
-    print("\nInput data device check:")
+    # print("\nInput data device check:")
     train_data = ensure_device(train_data, device)
     val_data = ensure_device(val_data, device)
-    print(f"train_data device: {train_data.device}")
-    print(f"val_data device: {val_data.device}")
+    # print(f"train_data device: {train_data.device}")
+    # print(f"val_data device: {val_data.device}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     training_records = []
@@ -206,7 +203,7 @@ def train_model(
     return model, training_records
 
 
-model = create_Bigram_model(device)
+# model = create_Bigram_model(device)
 
-# generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
+# # generate from the model
+# context = torch.zeros((1, 1), dtype=torch.long, device=device)

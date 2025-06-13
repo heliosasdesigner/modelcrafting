@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# hyperparameters
+
+# Default hyperparameters
 batch_size = 64  # how many independent sequences will we process in parallel?
 block_size = 256  # what is the maximum context length for predictions?
 max_iters = 5000
@@ -15,8 +16,6 @@ n_head = 6
 n_layer = 6
 dropout = 0.2
 # ------------
-
-torch.manual_seed(1337)
 
 
 def load_data(file_path):
@@ -62,7 +61,7 @@ def estimate_loss(model, eval_iters, block_size, batch_size, train_data, val_dat
     for split in ["train", "val"]:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(None, block_size, batch_size, split, train_data, val_data)
+            X, Y = get_batch(block_size, batch_size, split, train_data, val_data)
             logits, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
@@ -116,6 +115,19 @@ class MultiHeadAttention(nn.Module):
         return out
 
 
+class SimpleMultiHeadAttention(nn.Module):
+    """multiple heads of self-attention in parallel"""
+
+    def __init__(self, n_embd, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(n_embd, head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+
+        return out
+
+
 class FeedFoward(nn.Module):
     """a simple linear layer followed by a non-linearity"""
 
@@ -126,6 +138,17 @@ class FeedFoward(nn.Module):
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
             nn.Dropout(dropout),
+        )
+
+
+class SimpleFeedFoward(nn.Module):
+    """a simple linear layer followed by a non-linearity"""
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, n_embd),
+            nn.ReLU(),
         )
 
     def forward(self, x):
@@ -150,7 +173,7 @@ class Block(nn.Module):
         return x
 
 
-class BigramLanguageWithSelfAttentionModel(nn.Module):
+class BigramLanguageWithSingleHeadAttentionModel(nn.Module):
 
     def __init__(self, vocab_size, n_embd, block_size):
         super().__init__()
@@ -169,14 +192,227 @@ class BigramLanguageWithSelfAttentionModel(nn.Module):
         }
 
     def forward(self, idx, targets=None):
+        # print(
+        #     f"idx min: {idx.min().item()}, max: {idx.max().item()}, shape: {idx.shape}, vocab_size: {self.token_embedding_table.num_embeddings}"
+        # )
 
         B, T = idx.shape
 
+        if T > self.position_embedding_table.num_embeddings:
+            # Crop to last block_size tokens
+            idx = idx[:, -self.position_embedding_table.num_embeddings :]
+            T = idx.shape[1]
+
         # idx and targets are both (B,T) tensor of integers
         tok_emb = self.token_embedding_table(idx)  # (B,T,C)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T,C)
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=idx.device)
+        )  # (T,C)
         x = tok_emb + pos_emb  # (B,T,C) ( Boadcasting happens here )
         x = self.sa_head(x)  # (B,T,C) # apply one head of self-attention
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = targets.view(B * T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # get the predictions
+            # print(
+            #    f"1. idx shape: {idx.shape}, device: {idx.device}, type: {type(idx)},idx:{idx}"
+            # )
+            # Crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
+            print(f"2. idx_cond shape: {idx_cond.shape}")
+
+            # Get the predictions
+            logits, loss = self(idx_cond)
+            # Move logits to CPU for printing
+            logits_cpu = logits.cpu()
+            # print(
+            #     f"3.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
+            # )
+
+            # focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            logits_cpu = logits.cpu()
+            # print(
+            #     f"4.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
+            # )
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            probs_cpu = probs.cpu()
+            # print(
+            #     f"5.probs min: {probs_cpu.min().item()}, max: {probs_cpu.max().item()}, shape: {probs.shape}"
+            # )
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            idx_next_cpu = idx_next.cpu()
+            # print(
+            #     f"6.idx_next min: {idx_next_cpu.min().item()}, max: {idx_next_cpu.max().item()}, shape: {idx_next.shape}"
+            # )
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+            idx_cpu = idx.cpu()
+            # print(
+            #     f"7.idx min: {idx_cpu.min().item()}, max: {idx_cpu.max().item()}, shape: {idx.shape}"
+            # )
+        return idx
+
+
+class BigramLanguageWithSimpleMultiHeadAttentionModel(nn.Module):
+
+    def __init__(self, vocab_size, n_embd, block_size, n_head):
+        super().__init__()
+        # each token directly reads off the logits for the next token from a lookup table
+        assert (
+            n_embd % n_head == 0
+        ), f"n_embd ({n_embd}) must be divisible by n_head ({n_head})"
+        head_size = n_embd // n_head
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.sa_head = SimpleMultiHeadAttention(
+            n_embd, n_head, head_size
+        )  # i.e. 4 heads of 8-dimensional self-attention (if n_embd=32)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
+
+    def get_structure(self):
+        return {
+            "token_embedding_table": self.token_embedding_table,
+            "position_embedding_table": self.position_embedding_table,
+            "sa_head": self.sa_head,
+            "lm_head": self.lm_head,
+        }
+
+    def forward(self, idx, targets=None):
+        # print(
+        #     f"Forward: idx min: {idx.min().item()}, max: {idx.max().item()}, shape: {idx.shape}, vocab_size: {self.token_embedding_table.num_embeddings}"
+        # )
+
+        B, T = idx.shape
+
+        if T > self.position_embedding_table.num_embeddings:
+            # Crop to last block_size tokens
+            idx = idx[:, -self.position_embedding_table.num_embeddings :]
+            T = idx.shape[1]
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=idx.device)
+        )  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C) ( Boadcasting happens here )
+        x = self.sa_head(x)  # (B,T,C) # apply one head of self-attention
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = targets.view(B * T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # get the predictions
+            # print(
+            #     f"1. idx shape: {idx.shape}, device: {idx.device}, type: {type(idx)},idx:{idx}"
+            # )
+            # Crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
+            # print(f"2. idx_cond shape: {idx_cond.shape}")
+
+            # Get the predictions
+            logits, loss = self(idx_cond)
+            # Move logits to CPU for printing
+            logits_cpu = logits.cpu()
+            # print(
+            #     f"3.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
+            # )
+
+            # focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            logits_cpu = logits.cpu()
+            # print(
+            #     f"4.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
+            # )
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            probs_cpu = probs.cpu()
+            # print(
+            #     f"5.probs min: {probs_cpu.min().item()}, max: {probs_cpu.max().item()}, shape: {probs.shape}"
+            # )
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            idx_next_cpu = idx_next.cpu()
+            # print(
+            #     f"6.idx_next min: {idx_next_cpu.min().item()}, max: {idx_next_cpu.max().item()}, shape: {idx_next.shape}"
+            # )
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+            idx_cpu = idx.cpu()
+            #
+        return idx
+
+
+class BigramLanguageWithSimpleMultiHeadAttentionAndFeedForwardModel(nn.Module):
+
+    def __init__(self, vocab_size, n_embd, block_size, n_head):
+        super().__init__()
+        # each token directly reads off the logits for the next token from a lookup table
+        assert (
+            n_embd % n_head == 0
+        ), f"n_embd ({n_embd}) must be divisible by n_head ({n_head})"
+        head_size = n_embd // n_head
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.sa_head = SimpleMultiHeadAttention(
+            n_embd, n_head, head_size
+        )  # i.e. 4 heads of 8-dimensional self-attention (if n_embd=32)
+        self.ffwd = SimpleFeedFoward(n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
+
+    def get_structure(self):
+        return {
+            "token_embedding_table": self.token_embedding_table,
+            "position_embedding_table": self.position_embedding_table,
+            "sa_head": self.sa_head,
+            "ffwd": self.ffwd,
+            "lm_head": self.lm_head,
+        }
+
+    def forward(self, idx, targets=None):
+        # print(
+        #     f"Forward: idx min: {idx.min().item()}, max: {idx.max().item()}, shape: {idx.shape}, vocab_size: {self.token_embedding_table.num_embeddings}"
+        # )
+
+        B, T = idx.shape
+
+        if T > self.position_embedding_table.num_embeddings:
+            # Crop to last block_size tokens
+            idx = idx[:, -self.position_embedding_table.num_embeddings :]
+            T = idx.shape[1]
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
+        pos_emb = self.position_embedding_table(
+            torch.arange(T, device=idx.device)
+        )  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C) ( Boadcasting happens here )
+        x = self.sa_head(x)  # (B,T,C) # apply one head of self-attention
+        x = self.ffwd(x)  # (B,T,C) # apply feed-forward network
         logits = self.lm_head(x)  # (B,T,vocab_size)
 
         if targets is None:
@@ -202,35 +438,65 @@ class BigramLanguageWithSelfAttentionModel(nn.Module):
 
             # Get the predictions
             logits, loss = self(idx_cond)
+            # Move logits to CPU for printing
+            logits_cpu = logits.cpu()
             print(
-                f"3.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+                f"3.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
             )
 
             # focus only on the last time step
             logits = logits[:, -1, :]  # becomes (B, C)
+            logits_cpu = logits.cpu()
             print(
-                f"4.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+                f"4.logits min: {logits_cpu.min().item()}, max: {logits_cpu.max().item()}, shape: {logits.shape}"
             )
             # apply softmax to get probabilities
             probs = F.softmax(logits, dim=-1)  # (B, C)
+            probs_cpu = probs.cpu()
             print(
-                f"5.probs min: {probs.min()}, max: {probs.max()}, shape: {probs.shape}"
+                f"5.probs min: {probs_cpu.min().item()}, max: {probs_cpu.max().item()}, shape: {probs.shape}"
             )
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            idx_next_cpu = idx_next.cpu()
             print(
-                f"6.idx_next min: {idx_next.min()}, max: {idx_next.max()}, shape: {idx_next.shape}"
+                f"6.idx_next min: {idx_next_cpu.min().item()}, max: {idx_next_cpu.max().item()}, shape: {idx_next.shape}"
             )
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
-            print(f"7.idx min: {idx.min()}, max: {idx.max()}, shape: {idx.shape}")
+            idx_cpu = idx.cpu()
+            print(
+                f"7.idx min: {idx_cpu.min().item()}, max: {idx_cpu.max().item()}, shape: {idx.shape}"
+            )
         return idx
 
 
-def create_Bigram_with_SelfAttention_model(
+def create_Bigram_with_Single_Head_Attention_model(
     vocab_size, n_embd, block_size, device="cuda"
 ):
-    model = BigramLanguageWithSelfAttentionModel(vocab_size, n_embd, block_size)
+    model = BigramLanguageWithSingleHeadAttentionModel(vocab_size, n_embd, block_size)
+    model = model.to(device)
+    params = sum(p.numel() for p in model.parameters())
+    return model, params
+
+
+def create_Bigram_with_Simple_Multi_Head_Attention_model(
+    vocab_size, n_embd, block_size, n_head, device="cuda"
+):
+    model = BigramLanguageWithSimpleMultiHeadAttentionModel(
+        vocab_size, n_embd, block_size, n_head
+    )
+    model = model.to(device)
+    params = sum(p.numel() for p in model.parameters())
+    return model, params
+
+
+def create_Bigram_with_Simple_Multi_Head_Attention_And_Feed_Forward_model(
+    vocab_size, n_embd, block_size, n_head, device="cuda"
+):
+    model = BigramLanguageWithSimpleMultiHeadAttentionAndFeedForwardModel(
+        vocab_size, n_embd, block_size, n_head
+    )
     model = model.to(device)
     params = sum(p.numel() for p in model.parameters())
     return model, params
@@ -328,7 +594,7 @@ def ensure_device(data, device):
 # print(sum(p.numel() for p in m.parameters()) / 1e6, "M parameters")
 
 
-def train_model(
+def train_self_attention_model(
     model,
     train_data,
     val_data,
@@ -379,7 +645,7 @@ def train_model(
             )
 
         # sample a batch of data
-        xb, yb = get_batch(None, block_size, batch_size, "train", train_data, val_data)
+        xb, yb = get_batch(block_size, batch_size, "train", train_data, val_data)
 
         # evaluate the loss
         logits, loss = model(xb, yb)

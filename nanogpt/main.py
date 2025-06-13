@@ -1,12 +1,35 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import streamlit as st
 import pandas as pd
 import altair as alt
+import os
+import random
+import numpy as np
+
+
+# Set random seed for reproducibility
+def set_seed(seed=1337):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device == "cuda":
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
 
 # Set page configuration for wider layout
 st.set_page_config(
     page_title="NanoGPT", layout="wide", initial_sidebar_state="expanded"
 )
+
+# Force CPU device
+device = "cpu"
 
 from bigram import (
     BigramLanguageModel,
@@ -34,7 +57,7 @@ st.write(
 st.divider()
 
 
-tab1, tab2 = st.tabs(["Bigram Language Model", "Get into GPT"])
+tab1, tab2, tab3 = st.tabs(["Bigram Language Model", "Get into GPT", "Study Notes"])
 
 with tab1:
     st.subheader("Bigram Language Model")
@@ -186,7 +209,7 @@ with tab1:
     st.divider()
     st.markdown("#### Batching the data")
 
-    torch.manual_seed(1337)
+    set_seed(1337)
 
     batch_size = 4  # how many independent sequences will we process in parallel?
     block_size = 8  # what is the maximum context length for predictions?
@@ -225,8 +248,6 @@ with tab1:
 
     import torch.nn as nn
     from torch.nn import functional as F
-
-    torch.manual_seed(1337)
 
     st.write(
         f"Variables: B: batch_size = {batch_size}, T: context_length = {block_size}, C: vocab_size = {vocab_size}"
@@ -857,7 +878,7 @@ with tab2:
         """,
         unsafe_allow_html=True,
     )
-    torch.manual_seed(1337)
+
     B, T, C = 4, 8, 32  # batch, time-steps (sequence length), channels (embedding dim)
     x = torch.randn(B, T, C)
 
@@ -968,7 +989,570 @@ with tab2:
         unsafe_allow_html=True,
     )
     # ------------------------------------------------------------------
+
     st.divider()
+    st.markdown("### Let's train the model: Bigram with Self-Attention")
+
+    # Hyperparameters
+    batch_size = 32  # How many independent sequences will we process in parallel?
+    block_size = 8  # What is the maximum context length for predictions?
+    max_iters = 5000  # How many iterations to train for?
+    eval_interval = 500  # How often to evaluate the loss?
+    learning_rate = 1e-4
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    eval_iters = 200
+    n_embd = 32
+
+    # import all the functions from gpt.py
+    from gpt import (
+        load_data,
+        get_batch,
+        estimate_loss,
+        create_Bigram_with_Single_Head_Attention_model,
+        train_self_attention_model,
+    )
+
+    # Set seed for reproducibility
+    set_seed(1337)
+
+    # load the data
+    train_data, val_data, vocab_size, encode, decode = load_data(
+        "data/tiny_shakespeare.txt"
+    )
+
+    # get the batch
+    xb, yb = get_batch(block_size, batch_size, "train", train_data, val_data)
+
+    st.markdown("#### Re-prepare the Data")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Train data size: `{len(train_data)}`")
+        st.write(f"Val data size: `{len(val_data)}`")
+        st.write(f"Vocab size: `{vocab_size}`")
+        st.write(f"Encode: `{encode}`")
+        st.write(f"Decode: `{decode}`")
+    with col2:
+        st.write(f"xb: `{xb[:4]}`")
+        st.write(f"yb: `{yb[:4]}`")
+        st.write(f"xb shape: `{xb.shape}`")
+        st.write(f"yb shape: `{yb.shape}`")
+    # Move input tensors to the same device as the model
+    xb = xb.to(device)
+    yb = yb.to(device)
+    # create the model
+    bigram_with_self_attention_model, params = (
+        create_Bigram_with_Single_Head_Attention_model(vocab_size, n_embd, block_size)
+    )
+    st.divider()
+
+    st.markdown("#### Model Configuration")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("##### Hyperparameters")
+        st.write(f"Batch size: `{batch_size}`")
+        st.write(f"Block size: `{block_size}`")
+        st.write(f"Max iters: `{max_iters}`")
+        st.write(f"Eval interval: `{eval_interval}`")
+        st.write(f"Learning rate: `{learning_rate}`")
+        st.write(f"Device: `{device}`")
+        st.write(f"Eval iters: `{eval_iters}`")
+        st.write(f"Vocab size: `{vocab_size}`")
+        st.write(f"n_embd: `{n_embd}`")
+
+    with col2:
+        # Print the model structure
+        st.write("##### Model Structure")
+        st.write(bigram_with_self_attention_model.get_structure())
+        st.write(f"Number of parameters: `{params}`")
+
+    st.divider()
+
+    st.markdown("#### Initial Model Evaluation")
+    out, loss = bigram_with_self_attention_model.forward(xb, yb)
+
+    st.write(f"Output shape: `{out.shape}`")
+    st.write(f"Loss: `{loss.item() if loss is not None else None}`")
+
+    # Move idx to the same device for generation
+    idx = torch.zeros((1, 1), dtype=torch.long, device=device)
+    max_new_tokens = 100
+
+    st.write(f"Initial idx: `{idx}` with max_new_tokens: `{max_new_tokens}`")
+
+    bigram_with_self_attention_generated = bigram_with_self_attention_model.generate(
+        idx, max_new_tokens=max_new_tokens
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"Generated shape: `{bigram_with_self_attention_generated.shape}`")
+        st.write(f"Generated: `{bigram_with_self_attention_generated}`")
+    with col2:
+        st.write(f"Generated text: ")
+        st.write(
+            f"{decode(bigram_with_self_attention_model.generate(idx, max_new_tokens=max_new_tokens)[0].cpu().tolist())}"
+        )
+
+    # ------------------------------------------------------------------
+
+    st.markdown("### Model Output")
+    bigram_with_self_attention_model, bigram_with_self_attention_training_records = (
+        train_self_attention_model(
+            bigram_with_self_attention_model,
+            train_data,
+            val_data,
+            max_iters,
+            eval_interval,
+            eval_iters,
+            block_size,
+            batch_size,
+            learning_rate,
+        )
+    )
+
+    # st.markdown("#### Training Results")
+    # Convert training records to DataFrame
+    bigram_with_self_attention_training_records_df = pd.DataFrame(
+        bigram_with_self_attention_training_records
+    )
+
+    # Create Altair chart with axis limits
+    chart_for_bigram_with_self_attention_training_records = (
+        alt.Chart(bigram_with_self_attention_training_records_df)
+        .mark_line()
+        .encode(
+            x=alt.X("step", title="Step", scale=alt.Scale(domain=[0, max_iters])),
+            y=alt.Y(
+                "train_loss", title="Training Loss", scale=alt.Scale(domain=[0, 8])
+            ),
+        )
+        .properties(width="container", height=400)
+    )
+
+    # Add validation loss line
+    bigram_with_self_attention_val_line = (
+        alt.Chart(bigram_with_self_attention_training_records_df)
+        .mark_line(color="red")
+        .encode(
+            x="step",
+            y="val_loss",
+        )
+    )
+
+    # Combine the charts
+    bigram_with_self_attention_final_chart = (
+        chart_for_bigram_with_self_attention_training_records
+        + bigram_with_self_attention_val_line
+    )
+
+    st.altair_chart(bigram_with_self_attention_final_chart, use_container_width=True)
+
+    # Add a description
+    st.caption(
+        "Bigram with self-attention: Training and validation loss over time - lower values indicate better model performance"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("Steps number:")
+        st.write(f"**{max_iters}**")
+        st.write("Original Loss:")
+        st.write(loss.item())
+        st.write("Final Training Loss:")
+        st.write(bigram_with_self_attention_training_records[-1]["train_loss"])
+        st.write("Final Validation Loss:")
+        st.write(bigram_with_self_attention_training_records[-1]["val_loss"])
+    with col2:
+        st.write("Generate the text")
+        st.write(f"{decode(model.generate(idx, max_new_tokens=500)[0].cpu().tolist())}")
+
+    st.divider()
+    st.markdown("### Let's train the model: Bigram with Simple Multi-Head Attention")
+
+    # Hyperparameters
+    batch_size = 32  # How many independent sequences will we process in parallel?
+    block_size = 8  # What is the maximum context length for predictions?
+    max_iters = 5000  # How many iterations to train for?
+    eval_interval = 500  # How often to evaluate the loss?
+    learning_rate = 1e-4
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    eval_iters = 200
+    n_embd = 32
+    n_head = 4
+    # import all the functions from gpt.py
+    from gpt import (
+        load_data,
+        get_batch,
+        estimate_loss,
+        create_Bigram_with_Simple_Multi_Head_Attention_model,
+        train_self_attention_model,
+    )
+
+    # # Set seed for reproducibility
+    # set_seed(1337)
+
+    # # load the data
+    # train_data, val_data, vocab_size, encode, decode = load_data(
+    #     "data/tiny_shakespeare.txt"
+    # )
+
+    # # get the batch
+    # xb, yb = get_batch(block_size, batch_size, "train", train_data, val_data)
+
+    # create the model
+    bigram_with_simple_multi_head_attention_model, params = (
+        create_Bigram_with_Simple_Multi_Head_Attention_model(
+            vocab_size, n_embd, block_size, n_head
+        )
+    )
+
+    st.markdown("#### Model Configuration")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("##### Hyperparameters")
+        st.write(f"Batch size: `{batch_size}`")
+        st.write(f"Block size: `{block_size}`")
+        st.write(f"Max iters: `{max_iters}`")
+        st.write(f"Eval interval: `{eval_interval}`")
+        st.write(f"Learning rate: `{learning_rate}`")
+        st.write(f"Device: `{device}`")
+        st.write(f"Eval iters: `{eval_iters}`")
+        st.write(f"Vocab size: `{vocab_size}`")
+        st.write(f"n_embd: `{n_embd}`")
+        st.write(f"n_head: `{n_head}`")
+
+    with col2:
+        # Print the model structure
+        st.write("##### Model Structure")
+        st.write(bigram_with_simple_multi_head_attention_model.get_structure())
+        st.write(f"Number of parameters: `{params}`")
+
+    # st.divider()
+
+    # st.markdown("#### Re-prepare the Data")
+    # col1, col2 = st.columns(2)
+    # with col1:
+    #     st.write(f"Train data size: `{len(train_data)}`")
+    #     st.write(f"Val data size: `{len(val_data)}`")
+    #     st.write(f"Vocab size: `{vocab_size}`")
+    #     st.write(f"Encode: `{encode}`")
+    #     st.write(f"Decode: `{decode}`")
+    # with col2:
+    #     st.write(f"xb: `{xb[:4]}`")
+    #     st.write(f"yb: `{yb[:4]}`")
+    #     st.write(f"xb shape: `{xb.shape}`")
+    #     st.write(f"yb shape: `{yb.shape}`")
+    # Move input tensors to the same device as the model
+    xb = xb.to(device)
+    yb = yb.to(device)
+
+    st.divider()
+
+    st.markdown("#### Initial Model Evaluation")
+    out, loss = bigram_with_simple_multi_head_attention_model.forward(xb, yb)
+
+    st.write(f"Output shape: `{out.shape}`")
+    st.write(f"Loss: `{loss.item() if loss is not None else None}`")
+
+    # Move idx to the same device for generation
+    idx = torch.zeros((1, 1), dtype=torch.long, device=device)
+    max_new_tokens = 100
+
+    st.write(f"Initial idx: `{idx}` with max_new_tokens: `{max_new_tokens}`")
+
+    bigram_with_simple_multi_head_attention_generated = (
+        bigram_with_simple_multi_head_attention_model.generate(
+            idx, max_new_tokens=max_new_tokens
+        )
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(
+            f"Generated shape: `{bigram_with_simple_multi_head_attention_generated.shape}`"
+        )
+        st.write(f"Generated: `{bigram_with_simple_multi_head_attention_generated}`")
+    with col2:
+        st.write(f"Generated text: ")
+        st.write(
+            f"{decode(bigram_with_simple_multi_head_attention_model.generate(idx, max_new_tokens=max_new_tokens)[0].cpu().tolist())}"
+        )
+
+    # ------------------------------------------------------------------
+
+    st.markdown("### Model Output")
+    (
+        bigram_with_simple_multi_head_attention_model,
+        bigram_with_simple_multi_head_attention_training_records,
+    ) = train_self_attention_model(
+        bigram_with_simple_multi_head_attention_model,
+        train_data,
+        val_data,
+        max_iters,
+        eval_interval,
+        eval_iters,
+        block_size,
+        batch_size,
+        learning_rate,
+    )
+
+    # st.markdown("#### Training Results")
+    # Convert training records to DataFrame
+    bigram_with_simple_multi_head_attention_training_records_df = pd.DataFrame(
+        bigram_with_simple_multi_head_attention_training_records
+    )
+
+    # Create Altair chart with axis limits
+    chart_for_bigram_with_simple_multi_head_attention_training_records = (
+        alt.Chart(bigram_with_simple_multi_head_attention_training_records_df)
+        .mark_line()
+        .encode(
+            x=alt.X("step", title="Step", scale=alt.Scale(domain=[0, max_iters])),
+            y=alt.Y(
+                "train_loss", title="Training Loss", scale=alt.Scale(domain=[0, 8])
+            ),
+        )
+        .properties(width="container", height=400)
+    )
+
+    # Add validation loss line
+    bigram_with_simple_multi_head_attention_val_line = (
+        alt.Chart(bigram_with_simple_multi_head_attention_training_records_df)
+        .mark_line(color="red")
+        .encode(
+            x="step",
+            y="val_loss",
+        )
+    )
+
+    # Combine the charts
+    bigram_with_simple_multi_head_attention_final_chart = (
+        chart_for_bigram_with_simple_multi_head_attention_training_records
+        + bigram_with_simple_multi_head_attention_val_line
+    )
+
+    st.altair_chart(
+        bigram_with_simple_multi_head_attention_final_chart, use_container_width=True
+    )
+
+    # Add a description
+    st.caption(
+        "Bigram with simple multi-head attention: Training and validation loss over time - lower values indicate better model performance"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("Steps number:")
+        st.write(f"**{max_iters}**")
+        st.write("Original Loss:")
+        st.write(loss.item())
+        st.write("Final Training Loss:")
+        st.write(
+            bigram_with_simple_multi_head_attention_training_records[-1]["train_loss"]
+        )
+        st.write("Final Validation Loss:")
+        st.write(
+            bigram_with_simple_multi_head_attention_training_records[-1]["val_loss"]
+        )
+    with col2:
+        st.write("Generate the text")
+        st.write(
+            f"{decode(bigram_with_simple_multi_head_attention_model.generate(idx, max_new_tokens=500)[0].cpu().tolist())}"
+        )
+
+    st.divider()
+    st.markdown(
+        "### Let's train the model: Bigram with Simple Multi-Head Attention and Feed Forward"
+    )
+
+    # Hyperparameters
+    batch_size = 32  # How many independent sequences will we process in parallel?
+    block_size = 8  # What is the maximum context length for predictions?
+    max_iters = 5000  # How many iterations to train for?
+    eval_interval = 500  # How often to evaluate the loss?
+    learning_rate = 1e-4
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    eval_iters = 200
+    n_embd = 32
+    n_head = 4
+    # import all the functions from gpt.py
+    from gpt import (
+        load_data,
+        get_batch,
+        estimate_loss,
+        create_Bigram_with_Simple_Multi_Head_Attention_And_Feed_Forward_model,
+        train_self_attention_model,
+    )
+
+    # create the model
+    bigram_with_simple_multi_head_attention_and_feed_forward_model, params = (
+        create_Bigram_with_Simple_Multi_Head_Attention_And_Feed_Forward_model(
+            vocab_size, n_embd, block_size, n_head
+        )
+    )
+
+    st.markdown("#### Model Configuration")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("##### Hyperparameters")
+        st.write(f"Batch size: `{batch_size}`")
+        st.write(f"Block size: `{block_size}`")
+        st.write(f"Max iters: `{max_iters}`")
+        st.write(f"Eval interval: `{eval_interval}`")
+        st.write(f"Learning rate: `{learning_rate}`")
+        st.write(f"Device: `{device}`")
+        st.write(f"Eval iters: `{eval_iters}`")
+        st.write(f"Vocab size: `{vocab_size}`")
+        st.write(f"n_embd: `{n_embd}`")
+        st.write(f"n_head: `{n_head}`")
+
+    with col2:
+        # Print the model structure
+        st.write("##### Model Structure")
+        st.write(
+            bigram_with_simple_multi_head_attention_and_feed_forward_model.get_structure()
+        )
+        st.write(f"Number of parameters: `{params}`")
+
+    # st.divider()
+
+    # Move input tensors to the same device as the model
+    xb = xb.to(device)
+    yb = yb.to(device)
+
+    st.divider()
+
+    st.markdown("#### Initial Model Evaluation")
+    out, loss = bigram_with_simple_multi_head_attention_and_feed_forward_model.forward(
+        xb, yb
+    )
+
+    st.write(f"Output shape: `{out.shape}`")
+    st.write(f"Loss: `{loss.item() if loss is not None else None}`")
+
+    # Move idx to the same device for generation
+    idx = torch.zeros((1, 1), dtype=torch.long, device=device)
+    max_new_tokens = 100
+
+    st.write(f"Initial idx: `{idx}` with max_new_tokens: `{max_new_tokens}`")
+
+    bigram_with_simple_multi_head_attention_and_feed_forward_generated = (
+        bigram_with_simple_multi_head_attention_and_feed_forward_model.generate(
+            idx, max_new_tokens=max_new_tokens
+        )
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(
+            f"Generated shape: `{bigram_with_simple_multi_head_attention_and_feed_forward_generated.shape}`"
+        )
+        st.write(
+            f"Generated: `{bigram_with_simple_multi_head_attention_and_feed_forward_generated}`"
+        )
+    with col2:
+        st.write(f"Generated text: ")
+        st.write(
+            f"{decode(bigram_with_simple_multi_head_attention_and_feed_forward_model.generate(idx, max_new_tokens=max_new_tokens)[0].cpu().tolist())}"
+        )
+
+    # ------------------------------------------------------------------
+
+    st.markdown("### Model Output")
+    (
+        bigram_with_simple_multi_head_attention_and_feed_forward_model,
+        bigram_with_simple_multi_head_attention_and_feed_forward_training_records,
+    ) = train_self_attention_model(
+        bigram_with_simple_multi_head_attention_and_feed_forward_model,
+        train_data,
+        val_data,
+        max_iters,
+        eval_interval,
+        eval_iters,
+        block_size,
+        batch_size,
+        learning_rate,
+    )
+
+    # st.markdown("#### Training Results")
+    # Convert training records to DataFrame
+    bigram_with_simple_multi_head_attention_and_feed_forward_training_records_df = (
+        pd.DataFrame(
+            bigram_with_simple_multi_head_attention_and_feed_forward_training_records
+        )
+    )
+
+    # Create Altair chart with axis limits
+    chart_for_bigram_with_simple_multi_head_attention_and_feed_forward_training_records = (
+        alt.Chart(
+            bigram_with_simple_multi_head_attention_and_feed_forward_training_records_df
+        )
+        .mark_line()
+        .encode(
+            x=alt.X("step", title="Step", scale=alt.Scale(domain=[0, max_iters])),
+            y=alt.Y(
+                "train_loss", title="Training Loss", scale=alt.Scale(domain=[0, 8])
+            ),
+        )
+        .properties(width="container", height=400)
+    )
+
+    # Add validation loss line
+    bigram_with_simple_multi_head_attention_and_feed_forward_val_line = (
+        alt.Chart(
+            bigram_with_simple_multi_head_attention_and_feed_forward_training_records_df
+        )
+        .mark_line(color="red")
+        .encode(
+            x="step",
+            y="val_loss",
+        )
+    )
+
+    # Combine the charts
+    bigram_with_simple_multi_head_attention_and_feed_forward_final_chart = (
+        chart_for_bigram_with_simple_multi_head_attention_and_feed_forward_training_records
+        + bigram_with_simple_multi_head_attention_and_feed_forward_val_line
+    )
+
+    st.altair_chart(
+        bigram_with_simple_multi_head_attention_and_feed_forward_final_chart,
+        use_container_width=True,
+    )
+
+    # Add a description
+    st.caption(
+        "Bigram with simple multi-head attention and feed forward: Training and validation loss over time - lower values indicate better model performance"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("Steps number:")
+        st.write(f"**{max_iters}**")
+        st.write("Original Loss:")
+        st.write(loss.item())
+        st.write("Final Training Loss:")
+        st.write(
+            bigram_with_simple_multi_head_attention_and_feed_forward_training_records[
+                -1
+            ]["train_loss"]
+        )
+        st.write("Final Validation Loss:")
+        st.write(
+            bigram_with_simple_multi_head_attention_and_feed_forward_training_records[
+                -1
+            ]["val_loss"]
+        )
+    with col2:
+        st.write("Generate the text")
+        st.write(
+            f"{decode(bigram_with_simple_multi_head_attention_and_feed_forward_model.generate(idx, max_new_tokens=500)[0].cpu().tolist())}"
+        )
+
+    st.divider()
+
+
+with tab3:
     st.markdown("### Study Notes on Self-Attention")
 
     st.markdown(
@@ -1261,180 +1845,3 @@ with tab2:
     Stack N such blocks → project to logits → softmax → loss.
     """
     )
-
-    st.divider()
-    st.markdown("### Let's train the model: Bigram with Self-Attention")
-
-    # Hyperparameters
-    batch_size = 32  # How many independent sequences will we process in parallel?
-    block_size = 8  # What is the maximum context length for predictions?
-    max_iters = 5000  # How many iterations to train for?
-    eval_interval = 500  # How often to evaluate the loss?
-    learning_rate = 1e-4
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    eval_iters = 200
-    n_embd = 32
-
-    # import all the functions from gpt.py
-    from gpt import (
-        load_data,
-        get_batch,
-        estimate_loss,
-        create_Bigram_with_SelfAttention_model,
-        train_model,
-    )
-
-    # load the data
-    train_data, val_data, vocab_size, encode, decode = load_data(
-        "data/tiny_shakespeare.txt"
-    )
-
-    # get the batch
-    xb, yb = get_batch(block_size, batch_size, "train", train_data, val_data)
-
-    # create the model
-    bigram_with_self_attention_model, params = create_Bigram_with_SelfAttention_model(
-        vocab_size, n_embd, block_size
-    )
-
-    st.markdown("#### Model Configuration")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("##### Hyperparameters")
-        st.write(f"Batch size: `{batch_size}`")
-        st.write(f"Block size: `{block_size}`")
-        st.write(f"Max iters: `{max_iters}`")
-        st.write(f"Eval interval: `{eval_interval}`")
-        st.write(f"Learning rate: `{learning_rate}`")
-        st.write(f"Device: `{device}`")
-        st.write(f"Eval iters: `{eval_iters}`")
-        st.write(f"Vocab size: `{vocab_size}`")
-        st.write(f"n_embd: `{n_embd}`")
-
-    with col2:
-        # Print the model structure
-        st.write("##### Model Structure")
-        st.write(bigram_with_self_attention_model.get_structure())
-        st.write(f"Number of parameters: `{params}`")
-
-    st.divider()
-
-    st.markdown("#### Re-prepare the Data")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write(f"Train data size: `{len(train_data)}`")
-        st.write(f"Val data size: `{len(val_data)}`")
-        st.write(f"Vocab size: `{vocab_size}`")
-        st.write(f"Encode: `{encode}`")
-        st.write(f"Decode: `{decode}`")
-    with col2:
-        st.write(f"xb: `{xb[:4]}`")
-        st.write(f"yb: `{yb[:4]}`")
-        st.write(f"xb shape: `{xb.shape}`")
-        st.write(f"yb shape: `{yb.shape}`")
-    # Move input tensors to the same device as the model
-    xb = xb.to(device)
-    yb = yb.to(device)
-
-    st.divider()
-
-    st.markdown("#### Initial Model Evaluation")
-    out, loss = bigram_with_self_attention_model.forward(xb, yb)
-
-    st.write(f"Output shape: `{out.shape}`")
-    st.write(f"Loss: `{loss.item() if loss is not None else None}`")
-
-    # Move idx to the same device for generation
-    idx = torch.zeros((1, 1), dtype=torch.long, device=device)
-    max_new_tokens = 100
-
-    st.write(f"Initial idx: **{idx}** with max_new_tokens: **{max_new_tokens}**")
-
-    st.write(f"Generated text: ")
-    # generated = model.generate(idx, max_new_tokens=max_new_tokens)
-    # st.write(f"Generated shape: **{generated.shape}**")
-    # st.write(f"Generated: **{generated}**")
-    # st.write(
-    #     f"{decode(model.generate(idx, max_new_tokens=max_new_tokens)[0].cpu().tolist())}"
-    # )
-
-    # # ------------------------------------------------------------------
-
-    # st.markdown("### Final Model Output")
-    # model, training_records = train_model(
-    #     model,
-    #     train_data,
-    #     val_data,
-    #     max_iters,
-    #     eval_interval,
-    #     eval_iters,
-    #     block_size,
-    #     batch_size,
-    #     learning_rate,
-    # )
-
-    # # st.markdown("#### Training Results")
-    # # Convert training records to DataFrame
-    # training_records_df = pd.DataFrame(training_records)
-
-    # # Create Altair chart with axis limits
-    # chart_for_training_records = (
-    #     alt.Chart(training_records_df)
-    #     .mark_line()
-    #     .encode(
-    #         x=alt.X("step", title="Step", scale=alt.Scale(domain=[0, max_iters])),
-    #         y=alt.Y(
-    #             "train_loss", title="Training Loss", scale=alt.Scale(domain=[0, 8])
-    #         ),
-    #     )
-    #     .properties(width="container", height=400)
-    # )
-
-    # # Add validation loss line
-    # val_line = (
-    #     alt.Chart(training_records_df)
-    #     .mark_line(color="red")
-    #     .encode(
-    #         x="step",
-    #         y="val_loss",
-    #     )
-    # )
-
-    # # Combine the charts
-    # final_chart = chart_for_training_records + val_line
-
-    # st.altair_chart(final_chart, use_container_width=True)
-
-    # # Add a description
-    # st.caption(
-    #     "Training and validation loss over time - lower values indicate better model performance"
-    # )
-
-    # col1, col2 = st.columns(2)
-    # with col1:
-    #     st.write("Steps number:")
-    #     st.write(f"**{max_iters}**")
-    #     st.write("Loss:")
-    #     st.write(loss.item())
-    # with col2:
-    #     st.write("Generate the text")
-    #     # st.write(f"{decode(model.generate(idx, max_new_tokens=500)[0].cpu().tolist())}")
-
-    # # ------------------------------------------------------------------
-    # st.markdown("### Text Generation")
-    # # Prompt the user to enter a prompt
-    # st.divider()
-
-    # st.write("Enter a prompt to generate text:")
-    # prompt = st.text_area("Prompt")
-
-    # if st.button("Generate"):
-    #     if prompt:
-    #         # Encode the prompt
-    #         context = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
-    #         # Generate new tokens
-    #         generated = model.generate(context, max_new_tokens=500)
-    #         # Decode and display
-    #         st.write(f"Generated text: {decode(generated[0].tolist())}")
-    #     else:
-    #         st.write("Please enter a prompt first.")

@@ -45,7 +45,7 @@ def load_data(file_path):
 
 
 # data loading
-def get_batch(data, block_size, batch_size, split, train_data, val_data):
+def get_batch(block_size, batch_size, split, train_data, val_data):
     # generate a small batch of data of inputs x and targets y
     data = train_data if split == "train" else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -73,7 +73,7 @@ def estimate_loss(model, eval_iters, block_size, batch_size, train_data, val_dat
 class Head(nn.Module):
     """one head of self-attention"""
 
-    def __init__(self, head_size):
+    def __init__(self, n_embd, head_size):
         super().__init__()
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.query = nn.Linear(n_embd, head_size, bias=False)
@@ -150,6 +150,92 @@ class Block(nn.Module):
         return x
 
 
+class BigramLanguageWithSelfAttentionModel(nn.Module):
+
+    def __init__(self, vocab_size, n_embd, block_size):
+        super().__init__()
+        # each token directly reads off the logits for the next token from a lookup table
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        self.sa_head = Head(n_embd, n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
+
+    def get_structure(self):
+        return {
+            "token_embedding_table": self.token_embedding_table,
+            "position_embedding_table": self.position_embedding_table,
+            "sa_head": self.sa_head,
+            "lm_head": self.lm_head,
+        }
+
+    def forward(self, idx, targets=None):
+
+        B, T = idx.shape
+
+        # idx and targets are both (B,T) tensor of integers
+        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device))  # (T,C)
+        x = tok_emb + pos_emb  # (B,T,C) ( Boadcasting happens here )
+        x = self.sa_head(x)  # (B,T,C) # apply one head of self-attention
+        logits = self.lm_head(x)  # (B,T,vocab_size)
+
+        if targets is None:
+            loss = None
+        else:
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = targets.view(B * T)
+            loss = F.cross_entropy(logits, targets)
+
+        return logits, loss
+
+    def generate(self, idx, max_new_tokens):
+        # idx is (B, T) array of indices in the current context
+        for _ in range(max_new_tokens):
+            # get the predictions
+            print(
+                f"1. idx shape: {idx.shape}, device: {idx.device}, type: {type(idx)},idx:{idx}"
+            )
+            # Crop idx to the last block_size tokens
+            idx_cond = idx[:, -block_size:]
+            print(f"2. idx_cond shape: {idx_cond.shape}")
+
+            # Get the predictions
+            logits, loss = self(idx_cond)
+            print(
+                f"3.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+            )
+
+            # focus only on the last time step
+            logits = logits[:, -1, :]  # becomes (B, C)
+            print(
+                f"4.logits min: {logits.min()}, max: {logits.max()}, shape: {logits.shape}"
+            )
+            # apply softmax to get probabilities
+            probs = F.softmax(logits, dim=-1)  # (B, C)
+            print(
+                f"5.probs min: {probs.min()}, max: {probs.max()}, shape: {probs.shape}"
+            )
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
+            print(
+                f"6.idx_next min: {idx_next.min()}, max: {idx_next.max()}, shape: {idx_next.shape}"
+            )
+            # append sampled index to the running sequence
+            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
+            print(f"7.idx min: {idx.min()}, max: {idx.max()}, shape: {idx.shape}")
+        return idx
+
+
+def create_Bigram_with_SelfAttention_model(
+    vocab_size, n_embd, block_size, device="cuda"
+):
+    model = BigramLanguageWithSelfAttentionModel(vocab_size, n_embd, block_size)
+    model = model.to(device)
+    params = sum(p.numel() for p in model.parameters())
+    return model, params
+
+
 class GPTLanguageModel(nn.Module):
 
     def __init__(self, vocab_size):
@@ -173,6 +259,15 @@ class GPTLanguageModel(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def get_structure(self):
+        return {
+            "token_embedding_table": self.token_embedding_table,
+            "position_embedding_table": self.position_embedding_table,
+            "blocks": self.blocks,
+            "ln_f": self.ln_f,
+            "lm_head": self.lm_head,
+        }
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -213,8 +308,8 @@ class GPTLanguageModel(nn.Module):
         return idx
 
 
-def create_gpt_model(device="cuda"):
-    model = GPTLanguageModel()
+def create_gpt_model(vocab_size, device="cuda"):
+    model = GPTLanguageModel(vocab_size)
     model = model.to(device)
     params = sum(p.numel() for p in model.parameters())
     return model, params

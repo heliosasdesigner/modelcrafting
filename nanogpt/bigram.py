@@ -79,29 +79,18 @@ class BigramLanguageModel(nn.Module):
     def __init__(self):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
-        # self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
-        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.lm_head = nn.Linear(n_embd, vocab_size)  # LLM header
+        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
 
     def get_structure(self):
         return {
             "First Layer": "Token Embedding",
             "Second Layer": "Linear",
-            "Third Layer": "Cross Entropy",
         }
 
     def forward(self, idx, targets=None):
 
-        B, T = idx.shape
-
         # idx and targets are both (B,T) tensor of integers
-        tok_emb = self.token_embedding_table(idx)  # (B,T,C)
-        pos_emb = self.position_embedding_table(
-            torch.arange(T, device=idx.device)
-        )  # (T,C)
-        x = tok_emb + pos_emb  # (B,T,C) # broadcasted addition
-        logits = self.lm_head(x)  # (B,T,vocab_size)
+        logits = self.token_embedding_table(idx)  # (B,T,C)
 
         if targets is None:
             loss = None
@@ -146,7 +135,7 @@ class BigramLanguageModel(nn.Module):
         return idx
 
 
-def create_model(device="cuda"):
+def create_Bigram_model(device="cuda"):
     model = BigramLanguageModel()
     model = model.to(device)
     return model
@@ -217,7 +206,7 @@ def train_model(
     return model, training_records
 
 
-model = create_model(device)
+model = create_Bigram_model(device)
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)

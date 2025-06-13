@@ -12,7 +12,7 @@ from bigram import (
     BigramLanguageModel,
     get_batch,
     estimate_loss,
-    create_model,
+    create_Bigram_model,
     train_model,
     batch_size,
     block_size,
@@ -426,7 +426,7 @@ st.altair_chart(chart_for_example, use_container_width=True)
 # Add a description
 st.caption("Training loss over time - lower values indicate better model performance")
 
-st.write("##### Final Output")
+st.write("##### Output")
 col1, col2 = st.columns(2)
 with col1:
     st.write("Steps number:")
@@ -437,9 +437,139 @@ with col2:
     st.write("Generate the text")
     st.write(f"{decode(m.generate(idx, max_new_tokens=500)[0].cpu().tolist())}")
 
+# ------------------------------------------------------------------
+st.divider()
+st.markdown("### Let's put one more layer in the model")
+
+
+# Hyperparameters
+batch_size = 32  # How many independent sequences will we process in parallel?
+block_size = 8  # What is the maximum context length for predictions?
+max_iters = 3000  # How many iterations to train for?
+eval_interval = 300  # How often to evaluate the loss?
+learning_rate = 1e-2
+device = "cuda" if torch.cuda.is_available() else "cpu"
+eval_iters = 200
+n_embd = 32  # Number of embedding dimension
+
+# import all the functions from bigram.py
+from bigram import (
+    BigramLanguageModel,
+    get_batch,
+    estimate_loss,
+    create_Bigram_model,
+    train_model,
+)
+
+# create the model
+model = create_Bigram_model()
+
+st.markdown("#### Model Configuration")
+col1, col2 = st.columns(2)
+with col1:
+    st.write("##### Hyperparameters")
+    st.write(f"Batch size: {batch_size}")
+    st.write(f"Block size: {block_size}")
+    st.write(f"Max iters: {max_iters}")
+    st.write(f"Eval interval: {eval_interval}")
+    st.write(f"Learning rate: {learning_rate}")
+    st.write(f"Device: {device}")
+    st.write(f"Eval iters: {eval_iters}")
+with col2:
+    # Print the model structure
+    st.write("##### Model Structure")
+    st.write(model.get_structure())
+
+st.markdown("#### Initial Model Evaluation")
+# Move input tensors to the same device as the model
+xb = xb.to(device)
+yb = yb.to(device)
+
+out, loss = model(xb, yb)
+
+st.write(f"Output shape: **{out.shape}**")
+st.write(f"Loss: **{loss.item() if loss is not None else None}**")
+
+# Move idx to the same device for generation
+idx = torch.zeros((1, 1), dtype=torch.long, device=device)
+max_new_tokens = 100
+
+st.write(f"Initial idx: **{idx}** with max_new_tokens: **{max_new_tokens}**")
+
+st.write(f"Generated text: ")
+generated = model.generate(idx, max_new_tokens=max_new_tokens)
+st.write(f"Generated shape: **{generated.shape}**")
+st.write(f"Generated: **{generated}**")
+st.write(
+    f"{decode(model.generate(idx, max_new_tokens=max_new_tokens)[0].cpu().tolist())}"
+)
+
+# ------------------------------------------------------------------
+
+st.markdown("### Output")
+model, training_records = train_model(
+    model,
+    train_data,
+    val_data,
+    max_iters,
+    eval_interval,
+    eval_iters,
+    block_size,
+    batch_size,
+    learning_rate,
+)
+
+# st.markdown("#### Training Results")
+# Convert training records to DataFrame
+training_records_df = pd.DataFrame(training_records)
+
+# Create Altair chart with axis limits
+chart_for_training_records = (
+    alt.Chart(training_records_df)
+    .mark_line()
+    .encode(
+        x=alt.X("step", title="Step", scale=alt.Scale(domain=[0, max_iters])),
+        y=alt.Y("train_loss", title="Training Loss", scale=alt.Scale(domain=[0, 8])),
+    )
+    .properties(width="container", height=400)
+)
+
+# Add validation loss line
+val_line = (
+    alt.Chart(training_records_df)
+    .mark_line(color="red")
+    .encode(
+        x="step",
+        y="val_loss",
+    )
+)
+
+
+# Combine the charts
+final_chart = chart_for_training_records + val_line
+
+st.altair_chart(final_chart, use_container_width=True)
+
+# Add a description
+st.caption(
+    "Training and validation loss over time - lower values indicate better model performance"
+)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.write("Steps number:")
+    st.write(f"**{max_iters}**")
+    st.write("Loss:")
+    st.write(loss.item())
+with col2:
+    st.write("Generate the text")
+    st.write(f"{decode(model.generate(idx, max_new_tokens=500)[0].cpu().tolist())}")
+
 
 # ------------------------------------------------------------------
 st.divider()
+st.markdown("## Let's get into the Generative Pre-trained Transformer (GPT)")
+
 st.markdown("### The Mathematical Trick in self-attention")
 
 # consider the following toy example
@@ -856,12 +986,12 @@ from bigram import (
     BigramLanguageModel,
     get_batch,
     estimate_loss,
-    create_model,
+    create_Bigram_model,
     train_model,
 )
 
 # create the model
-model = create_model()
+model = create_Bigram_model()
 
 st.markdown("#### Model Configuration")
 col1, col2 = st.columns(2)
